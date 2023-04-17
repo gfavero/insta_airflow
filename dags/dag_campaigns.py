@@ -8,6 +8,11 @@ import pandas as pd
 from google.oauth2 import service_account
 from google.cloud import bigquery
 from airflow.operators.python_operator import PythonOperator
+from airflow.operators.dummy_operator import DummyOperator
+from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
+from airflow.providers.google.cloud.operators.bigquery import BigQueryCheckOperator
+from airflow.contrib.operators.bigquery_operator import BigQueryOperator
+from google.oauth2 import service_account
 
 
 # Variables **
@@ -17,11 +22,10 @@ client_secret = Variable.get("client_secret")
 ig_username = Variable.get("ig_username")
 endpoint_base = Variable.get("endpoint_base") 
 account_id_pri = Variable.get("account_id_pri") 
-
-PROJECT_ID="instagram-project-337102"
+PROJECT_ID = Variable.get("project_id") 
 DATASET = "insta_database"
 
-@task(task_id="task_geAddAccountIds")
+@task(task_id="task_get_add_accountIds")
 def geAddAccountIds(**kwargs):
     credentials = service_account.Credentials.from_service_account_file( '/opt/airflow/plugins/key.json')
     client = bigquery.Client(credentials=credentials)
@@ -31,7 +35,6 @@ def geAddAccountIds(**kwargs):
     df = client.query(query).to_dataframe()  
     for id in df.id:
         print(id)
-    # return df.id.to_dict()
     return dict(zip(df.id, df.index))
 
 def getMetaCampaigns(pagingUrl, account_id):
@@ -57,8 +60,8 @@ def getMetaCampaigns(pagingUrl, account_id):
       response['next'] = ''
     return response
 
-@task(task_id="task_getMetaCampaigns")
-def ETL_MetaCampaigns(**kwargs):
+@task(task_id="task_get_meta_campaigns")
+def ETLMetaCampaigns(**kwargs):
     ti = kwargs['ti']
     adaccounts_list = ti.xcom_pull(task_ids='task_geAddAccountIds')
     df_campaigns= pd.DataFrame(columns=['extracted_date','account_id','account_name','campaign_id','campaign_name','start_time','stop_time','status',])
@@ -70,7 +73,6 @@ def ETL_MetaCampaigns(**kwargs):
         global account_id
         global account_name
         # Get campaigns for each account
-        # campaigns = getMetaCampaigns('',id)
         campaigns = getMetaCampaigns('',id)
         
         # Store next cursor, account_id, and account_name from the campaign response
@@ -121,9 +123,8 @@ def ETL_MetaCampaigns(**kwargs):
                                                         ]
             df_campaigns.to_gbq( destination_table=f'{DATASET}.Campaigns',  project_id=PROJECT_ID, credentials=credentials, if_exists="replace" )
         except Exception as e:
+                print("Data extract error line : " + str(e)) 
                 print(campaigns['json_data'])
-                print("Data extract error 127: " + str(e)) 
-                                           
 
 default_args = {
     'owner': 'Gefa',
@@ -131,15 +132,24 @@ default_args = {
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 1,
-    'start_date':  datetime(2023,2,26),
+    'start_date':  datetime(2023,4,17),
     'retry_delay': timedelta(minutes=5),
     'catchup' : False
 }
 
-with DAG('ETL_MetaCampaigns', schedule_interval=timedelta(days=1), default_args=default_args, tags=['bigquery_gcp', 'api_Meta'] ) as dag:
+with DAG('ETL_meta_campaigns', schedule_interval=timedelta(days=1), default_args=default_args, tags=['bigquery_gcp', 'api_Meta'] ) as dag:
 
-    
-    task_01_geAddAccountIds = geAddAccountIds()
-    task_02_ETL_MetaCampaigns = ETL_MetaCampaigns()
+    start  = DummyOperator(
+        task_id = 'start',
+        dag = dag
+        )
 
-task_01_geAddAccountIds >> task_02_ETL_MetaCampaigns
+    task_01_get_add_accountIds = geAddAccountIds()
+    task_02_ETL_meta_campaigns = ETLMetaCampaigns()
+
+    end  = DummyOperator(
+        task_id = 'end',
+        dag = dag
+        ) 
+
+start >> task_01_get_add_accountIds >> task_02_ETL_meta_campaigns >> end

@@ -16,10 +16,10 @@ client_secret = Variable.get("client_secret")
 ig_username = Variable.get("ig_username")
 endpoint_base = Variable.get("endpoint_base") 
 account_id_pri = Variable.get("account_id_pri") 
-
-#google api
 PROJECT_ID = Variable.get("project_id") 
 DATASET = "insta_database"
+
+#google api
 LOCATION = "US"
 GOOGLE_CONN_ID = "google_cloud_default"
 
