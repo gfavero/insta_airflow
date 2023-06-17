@@ -9,10 +9,7 @@ from google.oauth2 import service_account
 from google.cloud import bigquery
 from airflow.operators.python_operator import PythonOperator
 from airflow.operators.dummy_operator import DummyOperator
-from airflow.providers.google.cloud.transfers.gcs_to_bigquery import GCSToBigQueryOperator
 from airflow.providers.google.cloud.operators.bigquery import BigQueryCheckOperator
-from airflow.contrib.operators.bigquery_operator import BigQueryOperator
-from google.oauth2 import service_account
 
 
 # Variables **
@@ -23,7 +20,11 @@ ig_username = Variable.get("ig_username")
 endpoint_base = Variable.get("endpoint_base") 
 account_id_pri = Variable.get("account_id_pri") 
 PROJECT_ID = Variable.get("project_id") 
-DATASET = "insta_database"
+DATASET = Variable.get("big_query_database") 
+
+#google api
+LOCATION = "US"
+GOOGLE_CONN_ID = "google_cloud_default"
 
 @task(task_id="task_get_add_accountIds")
 def geAddAccountIds(**kwargs):
@@ -63,7 +64,7 @@ def getMetaCampaigns(pagingUrl, account_id):
 @task(task_id="task_get_meta_campaigns")
 def ETLMetaCampaigns(**kwargs):
     ti = kwargs['ti']
-    adaccounts_list = ti.xcom_pull(task_ids='task_geAddAccountIds')
+    adaccounts_list = ti.xcom_pull(task_ids='task_get_add_accountIds')
     df_campaigns= pd.DataFrame(columns=['extracted_date','account_id','account_name','campaign_id','campaign_name','start_time','stop_time','status',])
     credentials = service_account.Credentials.from_service_account_file( '/opt/airflow/plugins/key.json')
     
@@ -74,12 +75,20 @@ def ETLMetaCampaigns(**kwargs):
         global account_name
         # Get campaigns for each account
         campaigns = getMetaCampaigns('',id)
+
+        try:  
+            len(campaigns['json_data']['campaigns']['data'])
+            VALID_CAMPAING = True
+        except Exception as e:
+            print(f'API Error Message: {campaigns["json_data"]}') # get error message from the facebook API
+            VALID_CAMPAING = False
         
         # Store next cursor, account_id, and account_name from the campaign response
         next = campaigns['next']
-        account_id = campaigns['json_data']['id']    
-        account_name = campaigns['json_data']['name']
-        try:
+        account_id = campaigns['json_data']['id']
+        account_name = campaigns['json_data']['name']  
+
+        if VALID_CAMPAING:
             for i in range(len(campaigns['json_data']['campaigns']['data'])):
                 # Store the campaign information in a dictionary
                 campaigns_dict = {
@@ -99,10 +108,15 @@ def ETLMetaCampaigns(**kwargs):
                                                         campaigns_dict ['stop_time'][:10] if campaigns_dict ['stop_time'] else campaigns_dict ['stop_time'],
                                                         campaigns_dict ['status'],
                                                     ]
-            # Continue to access the next set of campaigns if the next cursor is not an empty string
+            # Continue to access the next (page) set of campaigns if the next cursor is not an empty string
             while (next!=''):
                 campaigns = getMetaCampaigns(next,account_id)    
                 next = campaigns['next']
+                try:  
+                    len(campaigns['json_data']['data'])
+                except Exception as e:
+                    print(f'API Error Message: {campaigns["json_data"]}') # get error message from the facebook API
+
                 for j in range(len(campaigns['json_data']['data'])):
                     # Store the campaign information in a dictionary
                     campaigns_dict =    {
@@ -122,9 +136,6 @@ def ETLMetaCampaigns(**kwargs):
                                                             campaigns_dict ['status'],
                                                         ]
             df_campaigns.to_gbq( destination_table=f'{DATASET}.Campaigns',  project_id=PROJECT_ID, credentials=credentials, if_exists="replace" )
-        except Exception as e:
-                print("Data extract error line : " + str(e)) 
-                print(campaigns['json_data'])
 
 default_args = {
     'owner': 'Gefa',
@@ -132,24 +143,39 @@ default_args = {
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 1,
-    'start_date':  datetime(2023,4,17),
+    'start_date':  datetime(2023,6,10),
     'retry_delay': timedelta(minutes=5),
     'catchup' : False
 }
 
-with DAG('ETL_meta_campaigns', schedule_interval=timedelta(days=1), default_args=default_args, tags=['bigquery_gcp', 'api_Meta'] ) as dag:
+with DAG('ETL_Meta_Campaigns', schedule_interval=timedelta(days=1), default_args=default_args, tags=['bigquery_gcp', 'api_Meta'] ) as dag:
 
     start  = DummyOperator(
         task_id = 'start',
         dag = dag
         )
 
+    check_dataset_Campaigns = BigQueryCheckOperator(
+        task_id = 'check_dataset_Campaigns',
+        use_legacy_sql=False,
+        location = LOCATION,
+        sql = f'SELECT count(*) FROM `{PROJECT_ID}.{DATASET}.Campaigns`'
+        )
+
     task_01_get_add_accountIds = geAddAccountIds()
+
     task_02_ETL_meta_campaigns = ETLMetaCampaigns()
+
+    final_check_dataset_Campaigns = BigQueryCheckOperator(
+        task_id = 'final_check_dataset_Campaigns',
+        use_legacy_sql=False,
+        location = LOCATION,
+        sql = f'SELECT count(*) FROM `{PROJECT_ID}.{DATASET}.Campaigns`'
+        )
 
     end  = DummyOperator(
         task_id = 'end',
         dag = dag
         ) 
 
-start >> task_01_get_add_accountIds >> task_02_ETL_meta_campaigns >> end
+start >> check_dataset_Campaigns >> task_01_get_add_accountIds >> task_02_ETL_meta_campaigns >> final_check_dataset_Campaigns >> end

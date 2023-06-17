@@ -17,7 +17,7 @@ ig_username = Variable.get("ig_username")
 endpoint_base = Variable.get("endpoint_base") 
 account_id_pri = Variable.get("account_id_pri") 
 PROJECT_ID = Variable.get("project_id") 
-DATASET = "insta_database"
+DATASET = Variable.get("big_query_database") 
 
 #google api
 LOCATION = "US"
@@ -34,12 +34,12 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
+# Schedule to every hours starting in the minute 10
 with DAG('dag_Views_Temp_Table', schedule_interval='10 * * * *', default_args=default_args , tags=['bigquery_gcp']) as dag:
     
     start  = DummyOperator(
         task_id = 'start',
         dag = dag
-
         )
 
     check_dataset_stories_temp = BigQueryCheckOperator(
@@ -143,10 +143,3 @@ check_dataset_stories_insights_temp >> update_stories_insights_temp_table >> rem
 
 check_dataset_Business_temp  >> update_Business_temp  >> final_check_dataset_Business_temp  >> end
 check_dataset_Business_daily >> update_Business_daily >> final_check_dataset_Business_dayly >> end
-
-
-
-#create business discovery daily
-#create business discovery temp
- 
-

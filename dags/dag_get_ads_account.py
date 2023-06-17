@@ -6,6 +6,8 @@ from airflow.decorators import dag, task
 import json
 import pandas as pd
 from google.oauth2 import service_account
+from airflow.operators.dummy_operator import DummyOperator
+from airflow.providers.google.cloud.operators.bigquery import BigQueryCheckOperator
 
 
 # Variables
@@ -15,9 +17,12 @@ client_secret   = Variable.get("client_secret")
 ig_username     = Variable.get("ig_username")
 endpoint_base   = Variable.get("endpoint_base") 
 account_id_pri  = Variable.get("account_id_pri") 
+PROJECT_ID      = Variable.get("project_id") 
+DATASET         = Variable.get("big_query_database") 
 
-PROJECT_ID="instagram-project-337102"
-DATASET = "insta_database"
+#google api
+LOCATION = "US"
+GOOGLE_CONN_ID = "google_cloud_default"
 
 def getAdAccounts():
     url = endpoint_base + ig_username # endpoint url
@@ -26,7 +31,6 @@ def getAdAccounts():
     endpointParams['access_token'] = access_token # access token
     data = requests.get( url, endpointParams )
     response= json.loads( data.content ) 
-    # print(json.dumps(response,indent=4))
     return response
 
 @task(task_id="task_ETL_MetaAdAccounts")
@@ -60,13 +64,39 @@ default_args = {
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 1,
-    'start_date':  datetime(2023,2,23),
+    'start_date':  datetime(2023,6,11), #yyyy,mm,dd
     'retry_delay': timedelta(minutes=5),
     'catchup' : False
 }
 
-with DAG('ETL_MetaAdAccount', schedule_interval=timedelta(days=1), default_args=default_args, tags=['bigquery_gcp', 'api_Meta'] ) as dag:
+with DAG('ETL_Meta_AdAccount', schedule_interval=timedelta(days=1), default_args=default_args, tags=['bigquery_gcp', 'api_Meta'] ) as dag:
+
+    start  = DummyOperator(
+        task_id = 'start',
+        dag = dag
+        )
+
+    check_dataset_adAccounts = BigQueryCheckOperator(
+        task_id = 'check_dataset_adAccounts',
+        use_legacy_sql=False,
+        location = LOCATION,
+        sql = f'SELECT count(*) FROM `{PROJECT_ID}.{DATASET}.adAccounts`'
+        )
 
     task_01_MetaAdAccounts = getMetaAdAccounts()
 
+    final_check_dataset_adAccounts = BigQueryCheckOperator(
+        task_id = 'final_check_dataset_adAccounts',
+        use_legacy_sql=False,
+        location = LOCATION,
+        sql = f'SELECT count(*) FROM `{PROJECT_ID}.{DATASET}.adAccounts`'
+        )
+
+    end  = DummyOperator(
+        task_id = 'end',
+        dag = dag
+        ) 
+
 task_01_MetaAdAccounts
+
+start >> check_dataset_adAccounts >> task_01_MetaAdAccounts >> final_check_dataset_adAccounts >> end

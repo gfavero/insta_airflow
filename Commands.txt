@@ -1,0 +1,6 @@
+sudo docker compose up airflow-init
+sudo docker compose up
+sudo docker ps
+sudo docker compose down
+sudo docker compose up
+sudo chwn -R gefa/home/
