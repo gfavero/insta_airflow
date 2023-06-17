@@ -4,3 +4,12 @@ sudo docker ps
 sudo docker compose down
 sudo docker compose up
 sudo chwn -R gefa/home/
+
+
+
+# git commands
+
+git status
+git add .
+git commit -m "first commit"
+git push
